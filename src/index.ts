@@ -1,18 +1,10 @@
 import { IttyRouter, IRequest } from 'itty-router';
 
 // IMPORTANT: REPLACE THE PLACEHOLDER VALUES BELOW WITH YOUR GOOGLE OAUTH CREDENTIALS
-const GOOGLE_CLIENT_ID = 'YOUR_CLIENT_ID';
-const GOOGLE_CLIENT_SECRET = 'YOUR_CLIENT_SECRET';
-const REDIRECT_URI = 'http://localhost:8787/callback';
-
-const router = IttyRouter();
-
-router.get('/', () => new Response('Hello World!'));
-
-router.get('/auth', () => {
+router.get('/auth', (request: IRequest, env: Env) => {
 	const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-	url.searchParams.append('client_id', GOOGLE_CLIENT_ID);
-	url.searchParams.append('redirect_uri', REDIRECT_URI);
+	url.searchParams.append('client_id', env.GOOGLE_CLIENT_ID);
+	url.searchParams.append('redirect_uri', env.REDIRECT_URI);
 	url.searchParams.append('scope', 'https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile');
 	url.searchParams.append('response_type', 'code');
 	url.searchParams.append('access_type', 'offline');
@@ -30,9 +22,9 @@ router.get('/callback', async (request: IRequest, env: Env) => {
 			'Content-Type': 'application/x-www-form-urlencoded',
 		},
 		body: new URLSearchParams({
-			client_id: GOOGLE_CLIENT_ID,
-			client_secret: GOOGLE_CLIENT_SECRET,
-			redirect_uri: REDIRECT_URI,
+			client_id: env.GOOGLE_CLIENT_ID,
+			client_secret: env.GOOGLE_CLIENT_SECRET,
+			redirect_uri: env.REDIRECT_URI,
 			grant_type: 'authorization_code',
 			code,
 		}),
@@ -79,8 +71,8 @@ router.get('/proxy', async (request: IRequest, env: Env) => {
 				'Content-Type': 'application/x-www-form-urlencoded',
 			},
 			body: new URLSearchParams({
-				client_id: GOOGLE_CLIENT_ID,
-				client_secret: GOOGLE_CLIENT_SECRET,
+				client_id: env.GOOGLE_CLIENT_ID,
+				client_secret: env.GOOGLE_CLIENT_SECRET,
 				refresh_token: refreshToken,
 				grant_type: 'refresh_token',
 			}),

@@ -15,7 +15,12 @@
 			"binding": "TOKEN_STORE",
 			"id": "448cc77cb12a4a518ebb5269537f2650"
 		}
-	]
+	],
+	"vars": {
+		"GOOGLE_CLIENT_ID": "YOUR_CLIENT_ID",
+		"GOOGLE_CLIENT_SECRET": "YOUR_CLIENT_SECRET",
+		"REDIRECT_URI": "http://localhost:8787/callback"
+	}
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
