@@ -1,103 +1,316 @@
-import { IttyRouter, IRequest } from 'itty-router';
+import { IttyRouter, IRequest } from "itty-router";
+import { nanoid } from "nanoid";
+import cookie from "cookie";
 
-// IMPORTANT: REPLACE THE PLACEHOLDER VALUES BELOW WITH YOUR GOOGLE OAUTH CREDENTIALS
-router.get('/auth', (request: IRequest, env: Env) => {
-	const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-	url.searchParams.append('client_id', env.GOOGLE_CLIENT_ID);
-	url.searchParams.append('redirect_uri', env.REDIRECT_URI);
-	url.searchParams.append('scope', 'https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile');
-	url.searchParams.append('response_type', 'code');
-	url.searchParams.append('access_type', 'offline');
-	url.searchParams.append('prompt', 'consent');
-	return Response.redirect(url.toString(), 302);
+const router = IttyRouter();
+
+interface AppConfig {
+    client_id: string;
+    allowed_origins: string[];
+    gas_url: string;
+}
+
+interface Session {
+    access_token: string;
+    refresh_token?: string;
+}
+
+// CORS Preflight
+router.options("*", (request: IRequest, env: Env) => {
+    const origin = request.headers.get("Origin");
+    if (!origin) {
+        return new Response("Missing Origin header", { status: 400 });
+    }
+
+    const url = new URL(request.url);
+    const app_id = url.pathname.split("/")[2];
+
+    return (async () => {
+        const config: AppConfig | null = await env.TOKEN_STORE.get(
+            `config:${app_id}`,
+            "json",
+        );
+        if (!config || !config.allowed_origins.includes(origin)) {
+            return new Response("Invalid origin", { status: 403 });
+        }
+
+        return new Response(null, {
+            headers: {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods":
+                    "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Max-Age": "86400",
+            },
+        });
+    })();
 });
 
-router.get('/callback', async (request: IRequest, env: Env) => {
-	const url = new URL(request.url);
-	const code = url.searchParams.get('code');
+// GET /auth/:app_id/login
+router.get("/auth/:app_id/login", async (request: IRequest, env: Env) => {
+    const { app_id } = request.params;
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
 
-	const response = await fetch('https://oauth2.googleapis.com/token', {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/x-www-form-urlencoded',
-		},
-		body: new URLSearchParams({
-			client_id: env.GOOGLE_CLIENT_ID,
-			client_secret: env.GOOGLE_CLIENT_SECRET,
-			redirect_uri: env.REDIRECT_URI,
-			grant_type: 'authorization_code',
-			code,
-		}),
-	});
+    if (!config) {
+        return new Response("App not found", { status: 404 });
+    }
 
-	const data: any = await response.json();
-	await env.TOKEN_STORE.put('access_token', data.access_token);
-	if (data.refresh_token) {
-		await env.TOKEN_STORE.put('refresh_token', data.refresh_token);
+    const state = nanoid();
+    await env.TOKEN_STORE.put(`state:${state}`, app_id, { expirationTtl: 300 });
+
+    const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    url.searchParams.append("client_id", config.client_id);
+    url.searchParams.append(
+        "redirect_uri",
+        `https://auth.josephtseng.tw/auth/${app_id}/callback`,
+    );
+    url.searchParams.append(
+        "scope",
+        "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/script.projects",
+    );
+    url.searchParams.append("response_type", "code");
+    url.searchParams.append("access_type", "offline");
+    url.searchParams.append("prompt", "consent");
+    url.searchParams.append("state", state);
+
+    return Response.redirect(url.toString(), 302);
+});
+
+// GET /auth/:app_id/callback
+router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
+    const { app_id } = request.params;
+    const url = new URL(request.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+
+    if (!code || !state) {
+        return new Response("Missing code or state", { status: 400 });
+    }
+
+    const storedAppId = await env.TOKEN_STORE.get(`state:${state}`);
+    if (storedAppId !== app_id) {
+        return new Response("Invalid state", { status: 400 });
+    }
+
+    await env.TOKEN_STORE.delete(`state:${state}`);
+
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
+    if (!config) {
+        return new Response("App not found", { status: 404 });
+    }
+
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+            client_id: config.client_id,
+            client_secret: env.GOOGLE_CLIENT_SECRET,
+            redirect_uri: `https://auth.josephtseng.tw/auth/${app_id}/callback`,
+            grant_type: "authorization_code",
+            code,
+        }),
+    });
+
+    const data: any = await response.json();
+    if (data.error) {
+        return new Response(data.error_description, { status: 400 });
+    }
+
+    const sessionId = nanoid();
+    const session: Session = {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+    };
+    await env.TOKEN_STORE.put(`session:${sessionId}`, JSON.stringify(session));
+
+    const origin = request.headers.get("origin") || config.allowed_origins[0];
+
+    const sessionCookie = cookie.serialize("session_id", sessionId, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/",
+        domain: new URL(origin).hostname,
+    });
+
+    return new Response(null, {
+        status: 302,
+        headers: {
+            "Set-Cookie": sessionCookie,
+            Location: origin,
+        },
+    });
+});
+
+// ALL /auth/:app_id/api/*
+router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
+    const cookies = cookie.parse(request.headers.get("Cookie") || "");
+    const sessionId = cookies.session_id;
+
+    if (!sessionId) {
+        return new Response("Not authenticated", { status: 401 });
+    }
+
+    const session: Session | null = await env.TOKEN_STORE.get(
+        `session:${sessionId}`,
+        "json",
+    );
+    if (!session) {
+        return new Response("Invalid session", { status: 401 });
+    }
+
+    const { app_id } = request.params;
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
+    if (!config) {
+        return new Response("App not found", { status: 404 });
+    }
+
+    const requestUrl = new URL(request.url);
+    const gasPath = requestUrl.pathname.replace(`/auth/${app_id}/api`, "");
+    const gasUrl = new URL(gasPath + requestUrl.search, config.gas_url);
+
+    const makeRequest = async (token: string) => {
+        const headers = new Headers(request.headers);
+        headers.set("Authorization", `Bearer ${token}`);
+        const req = new Request(gasUrl.toString(), {
+            method: request.method,
+            headers,
+            body: request.body,
+            redirect: "follow",
+        });
+        return fetch(req);
+    };
+
+    let response = await makeRequest(session.access_token);
+
+    if (response.status === 401 && session.refresh_token) {
+        const refreshResponse = await fetch(
+            "https://oauth2.googleapis.com/token",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                body: new URLSearchParams({
+                    client_id: config.client_id,
+                    client_secret: env.GOOGLE_CLIENT_SECRET,
+                    refresh_token: session.refresh_token,
+                    grant_type: "refresh_token",
+                }),
+            },
+        );
+
+        const refreshData: any = await refreshResponse.json();
+        if (refreshData.access_token) {
+            session.access_token = refreshData.access_token;
+            await env.TOKEN_STORE.put(
+                `session:${sessionId}`,
+                JSON.stringify(session),
+            );
+            response = await makeRequest(session.access_token);
+        } else {
+            return new Response("Failed to refresh token", { status: 401 });
+        }
+    }
+
+    const origin = request.headers.get("Origin");
+    if (origin && config.allowed_origins.includes(origin)) {
+        const corsHeaders = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        };
+        const newHeaders = new Headers(response.headers);
+        for (const key in corsHeaders) {
+            newHeaders.set(key, corsHeaders[key]);
+        }
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: newHeaders,
+        });
+    }
+
+	return response;
+});
+
+// GET /auth/:app_id/logout
+router.get('/auth/:app_id/logout', async (request: IRequest, env: Env) => {
+	const cookies = cookie.parse(request.headers.get('Cookie') || '');
+	const sessionId = cookies.session_id;
+
+	if (sessionId) {
+		await env.TOKEN_STORE.delete(`session:${sessionId}`);
 	}
 
-	return new Response(JSON.stringify(data), {
+	const sessionCookie = cookie.serialize('session_id', '', {
+		httpOnly: true,
+		secure: true,
+		sameSite: 'lax',
+		path: '/',
+		expires: new Date(0),
+	});
+
+	return new Response(null, {
+		status: 302,
+		headers: {
+			'Set-Cookie': sessionCookie,
+			Location: env.LOGOUT_URL,
+		},
+	});
+});
+
+// GET /test/config/:app_id
+router.get('/test/config/:app_id', async (request: IRequest, env: Env) => {
+	const { app_id } = request.params;
+	const config: AppConfig | null = await env.TOKEN_STORE.get(`config:${app_id}`, 'json');
+
+	if (!config) {
+		return new Response('App not found', { status: 404 });
+	}
+
+	return new Response(JSON.stringify(config, null, 2), {
 		headers: {
 			'Content-Type': 'application/json',
 		},
 	});
 });
 
-router.get('/proxy', async (request: IRequest, env: Env) => {
-	let accessToken = await env.TOKEN_STORE.get('access_token');
-	if (!accessToken) {
+// GET /test/session
+router.get('/test/session', async (request: IRequest, env: Env) => {
+	const cookies = cookie.parse(request.headers.get('Cookie') || '');
+	const sessionId = cookies.session_id;
+
+	if (!sessionId) {
 		return new Response('Not authenticated', { status: 401 });
 	}
 
-	const url = 'https://www.googleapis.com/oauth2/v2/userinfo';
-	const headers = new Headers(request.headers);
-	headers.set('Authorization', `Bearer ${accessToken}`);
-
-	let response = await fetch(url, {
-		method: request.method,
-		headers,
-		body: request.body,
-	});
-
-	if (response.status === 401) {
-		const refreshToken = await env.TOKEN_STORE.get('refresh_token');
-		if (!refreshToken) {
-			return new Response('Refresh token not found', { status: 401 });
-		}
-
-		const refreshResponse = await fetch('https://oauth2.googleapis.com/token', {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/x-www-form-urlencoded',
-			},
-			body: new URLSearchParams({
-				client_id: env.GOOGLE_CLIENT_ID,
-				client_secret: env.GOOGLE_CLIENT_SECRET,
-				refresh_token: refreshToken,
-				grant_type: 'refresh_token',
-			}),
-		});
-
-		const refreshData: any = await refreshResponse.json();
-		if (refreshData.access_token) {
-			accessToken = refreshData.access_token;
-			await env.TOKEN_STORE.put('access_token', accessToken);
-			headers.set('Authorization', `Bearer ${accessToken}`);
-			response = await fetch(url, {
-				method: request.method,
-				headers,
-				body: request.body,
-			});
-		} else {
-			return new Response('Failed to refresh token', { status: 401 });
-		}
+	const session: Session | null = await env.TOKEN_STORE.get(`session:${sessionId}`, 'json');
+	if (!session) {
+		return new Response('Invalid session', { status: 401 });
 	}
 
-	return response;
+	return new Response(JSON.stringify(session, null, 2), {
+		headers: {
+			'Content-Type': 'application/json',
+		},
+	});
 });
 
 router.all('*', () => new Response('Not Found.', { status: 404 }));
 
 export default {
-	fetch: (request: IRequest, env: Env, ctx: ExecutionContext) => router.handle(request, env, ctx),
+    fetch: (request: IRequest, env: Env, ctx: ExecutionContext) =>
+        router.handle(request, env, ctx),
 };

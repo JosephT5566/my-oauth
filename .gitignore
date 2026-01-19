@@ -35,7 +35,6 @@ coverage
 .node_repl_history
 
 # Editors
-.vscode
 .idea
 
 # Optional data from tools such as nuxt/next/redux-toolkit
