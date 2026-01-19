@@ -19,7 +19,8 @@
 	"vars": {
 		"GOOGLE_CLIENT_ID": "YOUR_CLIENT_ID",
 		"GOOGLE_CLIENT_SECRET": "YOUR_CLIENT_SECRET",
-		"LOGOUT_URL": "http://localhost:3000"
+		"LOGOUT_URL": "http://localhost:3000",
+		"COOKIE_DOMAIN": "localhost"
 	}
 	/**
 	 * Smart Placement

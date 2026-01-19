@@ -1,8 +1,8 @@
-import { IttyRouter, IRequest } from "itty-router";
+import { IRequest, AutoRouter } from "itty-router";
 import { nanoid } from "nanoid";
 import cookie from "cookie";
 
-const router = IttyRouter();
+const router = AutoRouter();
 
 interface AppConfig {
     client_id: string;
@@ -15,8 +15,10 @@ interface Session {
     refresh_token?: string;
 }
 
+router.get("/", () => "Success!");
+
 // CORS Preflight
-router.options("*", (request: IRequest, env: Env) => {
+router.options("*", async (request: IRequest, env: Env) => {
     const origin = request.headers.get("Origin");
     if (!origin) {
         return new Response("Missing Origin header", { status: 400 });
@@ -25,26 +27,23 @@ router.options("*", (request: IRequest, env: Env) => {
     const url = new URL(request.url);
     const app_id = url.pathname.split("/")[2];
 
-    return (async () => {
-        const config: AppConfig | null = await env.TOKEN_STORE.get(
-            `config:${app_id}`,
-            "json",
-        );
-        if (!config || !config.allowed_origins.includes(origin)) {
-            return new Response("Invalid origin", { status: 403 });
-        }
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
+    if (!config || !config.allowed_origins.includes(origin)) {
+        return new Response("Invalid origin", { status: 403 });
+    }
 
-        return new Response(null, {
-            headers: {
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Methods":
-                    "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                "Access-Control-Allow-Credentials": "true",
-                "Access-Control-Max-Age": "86400",
-            },
-        });
-    })();
+    return new Response(null, {
+        headers: {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "86400",
+        },
+    });
 });
 
 // GET /auth/:app_id/login
@@ -63,7 +62,7 @@ router.get("/auth/:app_id/login", async (request: IRequest, env: Env) => {
     await env.TOKEN_STORE.put(`state:${state}`, app_id, { expirationTtl: 300 });
 
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    url.searchParams.append("client_id", config.client_id);
+    url.searchParams.append("client_id", env.GOOGLE_CLIENT_ID);
     url.searchParams.append(
         "redirect_uri",
         `https://auth.josephtseng.tw/auth/${app_id}/callback`,
@@ -112,7 +111,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
             "Content-Type": "application/x-www-form-urlencoded",
         },
         body: new URLSearchParams({
-            client_id: config.client_id,
+            client_id: env.GOOGLE_CLIENT_ID,
             client_secret: env.GOOGLE_CLIENT_SECRET,
             redirect_uri: `https://auth.josephtseng.tw/auth/${app_id}/callback`,
             grant_type: "authorization_code",
@@ -139,7 +138,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         secure: true,
         sameSite: "lax",
         path: "/",
-        domain: new URL(origin).hostname,
+        domain: env.COOKIE_DOMAIN,
     });
 
     return new Response(null, {
@@ -181,19 +180,19 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     const gasPath = requestUrl.pathname.replace(`/auth/${app_id}/api`, "");
     const gasUrl = new URL(gasPath + requestUrl.search, config.gas_url);
 
-    const makeRequest = async (token: string) => {
-        const headers = new Headers(request.headers);
+    const makeRequest = async (token: string, req: IRequest) => {
+        const headers = new Headers(req.headers);
         headers.set("Authorization", `Bearer ${token}`);
-        const req = new Request(gasUrl.toString(), {
-            method: request.method,
+        const newReq = new Request(gasUrl.toString(), {
+            method: req.method,
             headers,
-            body: request.body,
+            body: req.body,
             redirect: "follow",
         });
-        return fetch(req);
+        return fetch(newReq);
     };
 
-    let response = await makeRequest(session.access_token);
+    let response = await makeRequest(session.access_token, request.clone());
 
     if (response.status === 401 && session.refresh_token) {
         const refreshResponse = await fetch(
@@ -204,7 +203,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
                 body: new URLSearchParams({
-                    client_id: config.client_id,
+                    client_id: env.GOOGLE_CLIENT_ID,
                     client_secret: env.GOOGLE_CLIENT_SECRET,
                     refresh_token: session.refresh_token,
                     grant_type: "refresh_token",
@@ -219,7 +218,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
                 `session:${sessionId}`,
                 JSON.stringify(session),
             );
-            response = await makeRequest(session.access_token);
+            response = await makeRequest(session.access_token, request.clone());
         } else {
             return new Response("Failed to refresh token", { status: 401 });
         }
@@ -242,75 +241,86 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
         });
     }
 
-	return response;
+    return response;
 });
 
 // GET /auth/:app_id/logout
-router.get('/auth/:app_id/logout', async (request: IRequest, env: Env) => {
-	const cookies = cookie.parse(request.headers.get('Cookie') || '');
-	const sessionId = cookies.session_id;
+router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
+    const cookies = cookie.parse(request.headers.get("Cookie") || "");
+    const sessionId = cookies.session_id;
 
-	if (sessionId) {
-		await env.TOKEN_STORE.delete(`session:${sessionId}`);
-	}
+    if (sessionId) {
+        await env.TOKEN_STORE.delete(`session:${sessionId}`);
+    }
 
-	const sessionCookie = cookie.serialize('session_id', '', {
-		httpOnly: true,
-		secure: true,
-		sameSite: 'lax',
-		path: '/',
-		expires: new Date(0),
-	});
+    const sessionCookie = cookie.serialize("session_id", "", {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/",
+        expires: new Date(0),
+        domain: env.COOKIE_DOMAIN,
+    });
 
-	return new Response(null, {
-		status: 302,
-		headers: {
-			'Set-Cookie': sessionCookie,
-			Location: env.LOGOUT_URL,
-		},
-	});
+    return new Response(null, {
+        status: 302,
+        headers: {
+            "Set-Cookie": sessionCookie,
+            Location: env.LOGOUT_URL,
+        },
+    });
 });
 
 // GET /test/config/:app_id
-router.get('/test/config/:app_id', async (request: IRequest, env: Env) => {
-	const { app_id } = request.params;
-	const config: AppConfig | null = await env.TOKEN_STORE.get(`config:${app_id}`, 'json');
+router.get("/test/config/:app_id", async (request: IRequest, env: Env) => {
+    const origin = request.headers.get("Origin");
+    if (!origin) {
+        return new Response("Missing Origin header", { status: 400 });
+    }
+    const { app_id } = request.params;
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
 
-	if (!config) {
-		return new Response('App not found', { status: 404 });
-	}
+    if (!config) {
+        return new Response("App not found", { status: 404 });
+    }
 
-	return new Response(JSON.stringify(config, null, 2), {
-		headers: {
-			'Content-Type': 'application/json',
-		},
-	});
+    return new Response(JSON.stringify(config, null, 2), {
+        headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": origin,
+        },
+    });
 });
 
 // GET /test/session
-router.get('/test/session', async (request: IRequest, env: Env) => {
-	const cookies = cookie.parse(request.headers.get('Cookie') || '');
-	const sessionId = cookies.session_id;
+router.get("/test/session", async (request: IRequest, env: Env) => {
+    const cookies = cookie.parse(request.headers.get("Cookie") || "");
+    const sessionId = cookies.session_id;
 
-	if (!sessionId) {
-		return new Response('Not authenticated', { status: 401 });
-	}
+    if (!sessionId) {
+        return new Response("Not authenticated", { status: 401 });
+    }
 
-	const session: Session | null = await env.TOKEN_STORE.get(`session:${sessionId}`, 'json');
-	if (!session) {
-		return new Response('Invalid session', { status: 401 });
-	}
+    const session: Session | null = await env.TOKEN_STORE.get(
+        `session:${sessionId}`,
+        "json",
+    );
+    if (!session) {
+        return new Response("Invalid session", { status: 401 });
+    }
 
-	return new Response(JSON.stringify(session, null, 2), {
-		headers: {
-			'Content-Type': 'application/json',
-		},
-	});
+    return new Response(JSON.stringify(session, null, 2), {
+        headers: {
+            "Content-Type": "application/json",
+        },
+    });
 });
 
-router.all('*', () => new Response('Not Found.', { status: 404 }));
+router.all("*", () => new Response("Not Found.", { status: 404 }));
 
 export default {
-    fetch: (request: IRequest, env: Env, ctx: ExecutionContext) =>
-        router.handle(request, env, ctx),
+    ...router,
 };
