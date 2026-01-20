@@ -150,7 +150,6 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         secure: true,
         sameSite: "lax",
         path: "/",
-        domain: env.COOKIE_DOMAIN,
     });
 
     return new Response(null, {
@@ -328,7 +327,6 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
         sameSite: "none",
         path: "/",
         expires: new Date(0),
-        domain: env.COOKIE_DOMAIN,
     });
 
     return new Response(null, {
