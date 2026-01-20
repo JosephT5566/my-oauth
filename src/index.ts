@@ -192,22 +192,57 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     const gasPath = requestUrl.pathname.replace(`/auth/${app_id}/api`, "");
     const gasUrl = new URL(gasPath + requestUrl.search, config.gas_url);
 
-    const makeRequest = async (token: string, req: Request) => {
-        const headers = new Headers(req.headers);
-        headers.set("Authorization", `Bearer ${token}`);
+    let bodyContent = null;
+    if (request.method !== "GET" && request.method !== "HEAD") {
+        // body is a stream, it can be read once. Transfer it to an ArrayBuffer so that it can be reused.
+        bodyContent = await request.arrayBuffer();
+    }
+
+    const makeRequest = async (token: string) => {
+        let finalBody: ArrayBuffer | string | null = bodyContent;
+        const headers = new Headers(request.headers);
+        headers.set("Content-Type", "application/json");
+
+        if (request.method === "POST" && bodyContent) {
+            try {
+                // 將 ArrayBuffer 轉回 JSON 並注入 token
+                const text = new TextDecoder().decode(bodyContent);
+                const json = JSON.parse(text);
+                json.access_token = token; // 注入 Token
+                finalBody = JSON.stringify(json);
+            } catch (e) {
+                console.log(e);
+            }
+        }
         const newReq = new Request(gasUrl.toString(), {
-            method: req.method,
+            method: request.method,
             headers,
-            body: req.body,
+            body: finalBody,
             redirect: "follow",
         });
+        // console.log("make request", newReq);
         return fetch(newReq);
     };
 
-    let response = await makeRequest(session.access_token, request.clone());
+    let response = null;
+    try {
+        response = await makeRequest(session.access_token);
+    } catch (error) {
+        return new Response("Failed to fetch GAS", { status: 401 });
+    }
+
+    if (!response) {
+        return new Response("response failed", { status: 404 });
+    }
+
     const result = await response.json<GASResponse>();
 
-    if (result.errorCode === "TOKEN_EXPIRED" && session.refresh_token) {
+    if (
+        result &&
+        result.errorCode === "TOKEN_EXPIRED" &&
+        session.refresh_token
+    ) {
+        console.log("token expired");
         await env.TOKEN_STORE.delete(`session:${sessionId}`);
         // Refresh the access token
         const refreshResponse = await fetch(
@@ -235,7 +270,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
                 JSON.stringify(session),
             );
             // Make the request again with the new access token.
-            response = await makeRequest(session.access_token, request.clone());
+            response = await makeRequest(session.access_token);
         } else {
             return new Response("Failed to refresh token", { status: 401 });
         }
