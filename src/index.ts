@@ -164,11 +164,37 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
 
 // ALL /auth/:app_id/api/*
 router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
+    const { app_id } = request.params;
+    const origin = request.headers.get("Origin");
+
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
+
+    // A helper to create error responses with proper CORS headers
+    const createCorsError = (message: string, status: number) => {
+        const headers = new Headers();
+        if (origin && config?.allowed_origins.includes(origin)) {
+            headers.set("Access-Control-Allow-Origin", origin);
+            headers.set("Access-Control-Allow-Credentials", "true");
+        } else if (origin && !config) {
+            // Best-effort for config loading failure, preflight should handle most cases
+            headers.set("Access-Control-Allow-Origin", origin);
+            headers.set("Access-Control-Allow-Credentials", "true");
+        }
+        return new Response(message, { status, headers });
+    };
+
+    if (!config) {
+        return createCorsError("App not found", 404);
+    }
+
     const cookies = cookie.parse(request.headers.get("Cookie") || "");
     const sessionId = cookies.session_id;
 
     if (!sessionId) {
-        return new Response("Not authenticated", { status: 401 });
+        return createCorsError("Not authenticated", 401);
     }
 
     const session: Session | null = await env.TOKEN_STORE.get(
@@ -176,16 +202,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
         "json",
     );
     if (!session) {
-        return new Response("Invalid session", { status: 401 });
-    }
-
-    const { app_id } = request.params;
-    const config: AppConfig | null = await env.TOKEN_STORE.get(
-        `config:${app_id}`,
-        "json",
-    );
-    if (!config) {
-        return new Response("App not found", { status: 404 });
+        return createCorsError("Invalid session", 401);
     }
 
     const requestUrl = new URL(request.url);
@@ -208,7 +225,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
                 // 將 ArrayBuffer 轉回 JSON 並注入 token
                 const text = new TextDecoder().decode(bodyContent);
                 const json = JSON.parse(text);
-                json.access_token = token; // 注入 Token
+                json.access_token = token;
                 finalBody = JSON.stringify(json);
             } catch (e) {
                 console.log(e);
@@ -224,18 +241,19 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
         return fetch(newReq);
     };
 
-    let response = null;
+    let response: Response | null = null;
     try {
         response = await makeRequest(session.access_token);
     } catch (error) {
-        return new Response("Failed to fetch GAS", { status: 401 });
+        return createCorsError(`GAS failed, ${error}`, 500);
     }
 
     if (!response) {
-        return new Response("response failed", { status: 404 });
+        return createCorsError("response failed", 404);
     }
 
-    const result = await response.json<GASResponse>();
+    const responseClone = response.clone();
+    const result = await responseClone.json<GASResponse>().catch(() => null);
 
     if (
         result &&
@@ -243,6 +261,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
         session.refresh_token
     ) {
         console.log("token expired");
+
         await env.TOKEN_STORE.delete(`session:${sessionId}`);
         // Refresh the access token
         const refreshResponse = await fetch(
@@ -272,21 +291,16 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
             // Make the request again with the new access token.
             response = await makeRequest(session.access_token);
         } else {
-            return new Response("Failed to refresh token", { status: 401 });
+            return createCorsError("Failed to refresh token", 401);
         }
     }
 
-    // Handle CORS with response from GAS.
-    const origin = request.headers.get("Origin");
+    // Handle CORS for the final response
     if (origin && config.allowed_origins.includes(origin)) {
-        const corsHeaders: { [key: string]: string } = {
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-        };
         const newHeaders = new Headers(response.headers);
-        for (const key in corsHeaders) {
-            newHeaders.set(key, corsHeaders[key]);
-        }
+        newHeaders.set("Access-Control-Allow-Origin", origin);
+        newHeaders.set("Access-Control-Allow-Credentials", "true");
+
         return new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
@@ -299,6 +313,8 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
 
 // GET /auth/:app_id/logout
 router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
+    const url = new URL(request.url);
+    const redirectTo = url.searchParams.get("redirect_to") || "";
     const cookies = cookie.parse(request.headers.get("Cookie") || "");
     const sessionId = cookies.session_id;
 
@@ -309,7 +325,7 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
     const sessionCookie = cookie.serialize("session_id", "", {
         httpOnly: true,
         secure: true,
-        sameSite: "lax",
+        sameSite: "none",
         path: "/",
         expires: new Date(0),
         domain: env.COOKIE_DOMAIN,
@@ -319,7 +335,7 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
         status: 302,
         headers: {
             "Set-Cookie": sessionCookie, // Clear FE cookie.
-            Location: env.LOGOUT_URL,
+            Location: redirectTo,
         },
     });
 });
