@@ -8,7 +8,7 @@ npx wrangler dev
 Storing values in remote KV namespace ([doc](https://developers.cloudflare.com/kv/get-started/#4-interact-with-your-kv-namespace))
 
 ```
-npx wrangler kv key put --namespace-id=xxxxxxxxxxxxxxxx "<KEY>" "<VALUE>" --remote
+npx wrangler kv key put --binding=<Store name> "<KEY>" "<VALUE>" --remote
 ```
 
 (Without `--remote`, it's just modifying local dev simulated resources)

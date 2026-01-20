@@ -13,7 +13,8 @@
 	"kv_namespaces": [
 		{
 			"binding": "TOKEN_STORE",
-			"id": "448cc77cb12a4a518ebb5269537f2650"
+			"id": "448cc77cb12a4a518ebb5269537f2650",
+			"remote": true
 		}
 	],
 	"vars": {

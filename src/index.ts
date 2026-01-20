@@ -1,6 +1,6 @@
 import { IRequest, AutoRouter } from "itty-router";
 import { nanoid } from "nanoid";
-import cookie from "cookie";
+import * as cookie from "cookie";
 
 const router = AutoRouter();
 
@@ -144,6 +144,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
 
     const origin = request.headers.get("origin") || config.allowed_origins[0];
 
+    // session id will be saved to FE cookie.
     const sessionCookie = cookie.serialize("session_id", sessionId, {
         httpOnly: true,
         secure: true,
@@ -207,6 +208,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     const result = await response.json<GASResponse>();
 
     if (result.errorCode === "TOKEN_EXPIRED" && session.refresh_token) {
+        await env.TOKEN_STORE.delete(`session:${sessionId}`);
         // Refresh the access token
         const refreshResponse = await fetch(
             "https://oauth2.googleapis.com/token",
