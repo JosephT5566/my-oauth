@@ -148,7 +148,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
     const sessionCookie = cookie.serialize("session_id", sessionId, {
         httpOnly: true,
         secure: true,
-        sameSite: "lax",
+        sameSite: "none", // for cross-site, or we should set "lax"
         path: "/",
     });
 
