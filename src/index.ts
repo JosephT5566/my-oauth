@@ -15,6 +15,13 @@ interface Session {
     refresh_token?: string;
 }
 
+interface GASResponse {
+    ok: boolean;
+    result?: any;
+    error?: string;
+    errorCode?: string;
+}
+
 router.get("/", () => "Success!");
 
 // CORS Preflight
@@ -61,28 +68,31 @@ router.get("/auth/:app_id/login", async (request: IRequest, env: Env) => {
     const state = nanoid();
     await env.TOKEN_STORE.put(`state:${state}`, app_id, { expirationTtl: 300 });
 
-    const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    url.searchParams.append("client_id", env.GOOGLE_CLIENT_ID);
-    url.searchParams.append(
+    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    const requestUrl = new URL(request.url);
+    authUrl.searchParams.append("client_id", env.GOOGLE_CLIENT_ID);
+    // Once the Google Auth flow is complete, Google will return the data to callback
+    authUrl.searchParams.append(
         "redirect_uri",
-        `https://auth.josephtseng.tw/auth/${app_id}/callback`,
+        `${requestUrl.origin}/auth/${app_id}/callback`,
     );
-    url.searchParams.append(
+    authUrl.searchParams.append(
         "scope",
         "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/script.projects",
     );
-    url.searchParams.append("response_type", "code");
-    url.searchParams.append("access_type", "offline");
-    url.searchParams.append("prompt", "consent");
-    url.searchParams.append("state", state);
+    authUrl.searchParams.append("response_type", "code");
+    authUrl.searchParams.append("access_type", "offline");
+    authUrl.searchParams.append("prompt", "consent");
+    authUrl.searchParams.append("state", state);
 
-    return Response.redirect(url.toString(), 302);
+    return Response.redirect(authUrl.toString(), 302);
 });
 
 // GET /auth/:app_id/callback
 router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
     const { app_id } = request.params;
     const url = new URL(request.url);
+    // Once Google Oauth flow is complete, Google will return the data, code and state, to callback
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
 
@@ -90,6 +100,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         return new Response("Missing code or state", { status: 400 });
     }
 
+    // Compare the app id is the same as we stored to prevent CSRF attacks.
     const storedAppId = await env.TOKEN_STORE.get(`state:${state}`);
     if (storedAppId !== app_id) {
         return new Response("Invalid state", { status: 400 });
@@ -113,7 +124,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         body: new URLSearchParams({
             client_id: env.GOOGLE_CLIENT_ID,
             client_secret: env.GOOGLE_CLIENT_SECRET,
-            redirect_uri: `https://auth.josephtseng.tw/auth/${app_id}/callback`,
+            redirect_uri: `${url.origin}/auth/${app_id}/callback`,
             grant_type: "authorization_code",
             code,
         }),
@@ -144,7 +155,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
     return new Response(null, {
         status: 302,
         headers: {
-            "Set-Cookie": sessionCookie,
+            "Set-Cookie": sessionCookie, // set cookie to FE.
             Location: origin,
         },
     });
@@ -180,7 +191,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     const gasPath = requestUrl.pathname.replace(`/auth/${app_id}/api`, "");
     const gasUrl = new URL(gasPath + requestUrl.search, config.gas_url);
 
-    const makeRequest = async (token: string, req: IRequest) => {
+    const makeRequest = async (token: string, req: Request) => {
         const headers = new Headers(req.headers);
         headers.set("Authorization", `Bearer ${token}`);
         const newReq = new Request(gasUrl.toString(), {
@@ -193,8 +204,10 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     };
 
     let response = await makeRequest(session.access_token, request.clone());
+    const result = await response.json<GASResponse>();
 
-    if (response.status === 401 && session.refresh_token) {
+    if (result.errorCode === "TOKEN_EXPIRED" && session.refresh_token) {
+        // Refresh the access token
         const refreshResponse = await fetch(
             "https://oauth2.googleapis.com/token",
             {
@@ -213,20 +226,23 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
 
         const refreshData: any = await refreshResponse.json();
         if (refreshData.access_token) {
+            // Update the session with the new access token.
             session.access_token = refreshData.access_token;
             await env.TOKEN_STORE.put(
                 `session:${sessionId}`,
                 JSON.stringify(session),
             );
+            // Make the request again with the new access token.
             response = await makeRequest(session.access_token, request.clone());
         } else {
             return new Response("Failed to refresh token", { status: 401 });
         }
     }
 
+    // Handle CORS with response from GAS.
     const origin = request.headers.get("Origin");
     if (origin && config.allowed_origins.includes(origin)) {
-        const corsHeaders = {
+        const corsHeaders: { [key: string]: string } = {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
         };
@@ -265,7 +281,7 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
     return new Response(null, {
         status: 302,
         headers: {
-            "Set-Cookie": sessionCookie,
+            "Set-Cookie": sessionCookie, // Clear FE cookie.
             Location: env.LOGOUT_URL,
         },
     });

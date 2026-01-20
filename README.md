@@ -1,3 +1,9 @@
+## Local test
+Start the local
+```
+npx wrangler dev
+```
+
 ## KV
 Storing values in remote KV namespace ([doc](https://developers.cloudflare.com/kv/get-started/#4-interact-with-your-kv-namespace))
 
