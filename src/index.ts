@@ -148,16 +148,23 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
     const sessionCookie = cookie.serialize("session_id", sessionId, {
         httpOnly: true,
         secure: true,
-        sameSite: "none", // for cross-site, or we should set "lax"
+        sameSite: "none",
         path: "/",
     });
 
+    const loggedInCookie = cookie.serialize("is_logged_in", "true", {
+        secure: true,
+        sameSite: "none",
+        path: "/",
+    });
+
+    const headers = new Headers({ Location: origin });
+    headers.append("Set-Cookie", sessionCookie);
+    headers.append("Set-Cookie", loggedInCookie);
+
     return new Response(null, {
         status: 302,
-        headers: {
-            "Set-Cookie": sessionCookie, // set cookie to FE.
-            Location: origin,
-        },
+        headers,
     });
 });
 
@@ -302,7 +309,14 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
                 path: "/",
                 expires: new Date(0),
             });
+            const loggedInCookie = cookie.serialize("is_logged_in", "", {
+                secure: true,
+                sameSite: "none",
+                path: "/",
+                expires: new Date(0),
+            });
             errorResponse.headers.append("Set-Cookie", sessionCookie);
+            errorResponse.headers.append("Set-Cookie", loggedInCookie);
             return errorResponse;
         }
     }
@@ -412,7 +426,14 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
                 path: "/",
                 expires: new Date(0),
             });
+            const loggedInCookie = cookie.serialize("is_logged_in", "", {
+                secure: true,
+                sameSite: "none",
+                path: "/",
+                expires: new Date(0),
+            });
             errorResponse.headers.append("Set-Cookie", sessionCookie);
+            errorResponse.headers.append("Set-Cookie", loggedInCookie);
             await env.TOKEN_STORE.delete(`session:${sessionId}`);
             return errorResponse;
         }
@@ -452,12 +473,20 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
         expires: new Date(0),
     });
 
+    const loggedInCookie = cookie.serialize("is_logged_in", "", {
+        secure: true,
+        sameSite: "none",
+        path: "/",
+        expires: new Date(0),
+    });
+
+    const headers = new Headers({ Location: redirectTo });
+    headers.append("Set-Cookie", sessionCookie);
+    headers.append("Set-Cookie", loggedInCookie);
+
     return new Response(null, {
         status: 302,
-        headers: {
-            "Set-Cookie": sessionCookie, // Clear FE cookie.
-            Location: redirectTo,
-        },
+        headers,
     });
 });
 
