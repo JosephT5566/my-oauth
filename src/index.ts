@@ -290,7 +290,20 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
             // Make the request again with the new access token.
             response = await makeRequest(session.access_token);
         } else {
-            return createCorsError("Failed to refresh token", 401);
+            // the refresh token expired, sign out the FE automatically.
+            const errorResponse = createCorsError(
+                "Failed to refresh token",
+                401,
+            );
+            const sessionCookie = cookie.serialize("session_id", "", {
+                httpOnly: true,
+                secure: true,
+                sameSite: "none",
+                path: "/",
+                expires: new Date(0),
+            });
+            errorResponse.headers.append("Set-Cookie", sessionCookie);
+            return errorResponse;
         }
     }
 
