@@ -323,6 +323,116 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     return response;
 });
 
+// GET /auth/:app_id/me
+router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
+    const { app_id } = request.params;
+    const origin = request.headers.get("Origin");
+
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
+
+    const createCorsError = (message: string, status: number) => {
+        const headers = new Headers();
+        if (origin && config?.allowed_origins.includes(origin)) {
+            headers.set("Access-Control-Allow-Origin", origin);
+            headers.set("Access-Control-Allow-Credentials", "true");
+        } else if (origin) {
+            headers.set("Access-Control-Allow-Origin", origin);
+            headers.set("Access-Control-Allow-Credentials", "true");
+        }
+        return new Response(message, { status, headers });
+    };
+
+    if (!config) {
+        return createCorsError("App not found", 404);
+    }
+    if (!origin || !config.allowed_origins.includes(origin)) {
+        return createCorsError("Invalid origin", 403);
+    }
+
+    const cookies = cookie.parse(request.headers.get("Cookie") || "");
+    const sessionId = cookies.session_id;
+
+    if (!sessionId) {
+        return createCorsError("Not authenticated", 401);
+    }
+
+    const session: Session | null = await env.TOKEN_STORE.get(
+        `session:${sessionId}`,
+        "json",
+    );
+    if (!session) {
+        return createCorsError("Invalid session", 401);
+    }
+
+    const fetchUserInfo = async (accessToken: string) => {
+        return await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        });
+    };
+
+    let userInfoResponse = await fetchUserInfo(session.access_token);
+
+    // update the access token once we found it's expired
+    if (userInfoResponse.status === 401 && session.refresh_token) {
+        const refreshResponse = await fetch(
+            "https://oauth2.googleapis.com/token",
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                    client_id: env.GOOGLE_CLIENT_ID,
+                    client_secret: env.GOOGLE_CLIENT_SECRET,
+                    refresh_token: session.refresh_token,
+                    grant_type: "refresh_token",
+                }),
+            },
+        );
+        const refreshData: any = await refreshResponse.json();
+        if (refreshData.access_token) {
+            session.access_token = refreshData.access_token;
+            if (refreshData.refresh_token) {
+                session.refresh_token = refreshData.refresh_token;
+            }
+            await env.TOKEN_STORE.put(
+                `session:${sessionId}`,
+                JSON.stringify(session),
+            );
+            userInfoResponse = await fetchUserInfo(session.access_token);
+        } else {
+            const errorResponse = createCorsError("Session expired", 401);
+            const sessionCookie = cookie.serialize("session_id", "", {
+                httpOnly: true,
+                secure: true,
+                sameSite: "none",
+                path: "/",
+                expires: new Date(0),
+            });
+            errorResponse.headers.append("Set-Cookie", sessionCookie);
+            await env.TOKEN_STORE.delete(`session:${sessionId}`);
+            return errorResponse;
+        }
+    }
+
+    if (!userInfoResponse.ok) {
+        return createCorsError(
+            `Failed to fetch user info: ${await userInfoResponse.text()}`,
+            userInfoResponse.status,
+        );
+    }
+    const userInfo = await userInfoResponse.json();
+    const headers = new Headers({
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+    });
+    return new Response(JSON.stringify(userInfo), { headers });
+});
+
 // GET /auth/:app_id/logout
 router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
     const url = new URL(request.url);
