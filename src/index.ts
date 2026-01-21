@@ -181,12 +181,29 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         path: "/",
     });
 
-    const headers = new Headers({ Location: statePayload.redirectTo });
+    const html = `
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Redirecting...</title>
+            <script>
+            window.location.href = "${statePayload.redirectTo}";
+            </script>
+        </head>
+        <body>
+            <p>Redirecting you to the application...</p>
+        </body>
+    </html>`;
+
+    const headers = new Headers({
+        "Content-Type": "text/html",
+    });
     headers.append("Set-Cookie", sessionCookie);
     headers.append("Set-Cookie", loggedInCookie);
 
-    return new Response(null, {
-        status: 302,
+    return new Response(html, {
+        status: 200,
         headers,
     });
 });
