@@ -65,8 +65,32 @@ router.get("/auth/:app_id/login", async (request: IRequest, env: Env) => {
         return new Response("App not found", { status: 404 });
     }
 
+    const url = new URL(request.url);
+    const redirectTo = url.searchParams.get("redirect_to");
+
+    // Security: Validate that the redirectTo origin is allowed
+    if (redirectTo) {
+        try {
+            const redirectToUrl = new URL(redirectTo);
+            if (!config.allowed_origins.includes(redirectToUrl.origin)) {
+                return new Response("redirect_to origin not allowed", {
+                    status: 400,
+                });
+            }
+        } catch (e) {
+            return new Response("Invalid redirect_to URL", { status: 400 });
+        }
+    }
+
     const state = nanoid();
-    await env.TOKEN_STORE.put(`state:${state}`, app_id, { expirationTtl: 300 });
+    const statePayload = {
+        app_id,
+        redirectTo: redirectTo || config.allowed_origins[0],
+    };
+
+    await env.TOKEN_STORE.put(`state:${state}`, JSON.stringify(statePayload), {
+        expirationTtl: 300,
+    });
 
     const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     const requestUrl = new URL(request.url);
@@ -100,9 +124,10 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         return new Response("Missing code or state", { status: 400 });
     }
 
-    // Compare the app id is the same as we stored to prevent CSRF attacks.
-    const storedAppId = await env.TOKEN_STORE.get(`state:${state}`);
-    if (storedAppId !== app_id) {
+    const statePayload: { app_id: string; redirectTo: string } | null =
+        await env.TOKEN_STORE.get(`state:${state}`, "json");
+
+    if (!statePayload || statePayload.app_id !== app_id) {
         return new Response("Invalid state", { status: 400 });
     }
 
@@ -142,8 +167,6 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
     };
     await env.TOKEN_STORE.put(`session:${sessionId}`, JSON.stringify(session));
 
-    const origin = request.headers.get("origin") || config.allowed_origins[0];
-
     // session id will be saved to FE cookie.
     const sessionCookie = cookie.serialize("session_id", sessionId, {
         httpOnly: true,
@@ -158,7 +181,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         path: "/",
     });
 
-    const headers = new Headers({ Location: origin });
+    const headers = new Headers({ Location: statePayload.redirectTo });
     headers.append("Set-Cookie", sessionCookie);
     headers.append("Set-Cookie", loggedInCookie);
 
@@ -397,7 +420,9 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
             "https://oauth2.googleapis.com/token",
             {
                 method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
                 body: new URLSearchParams({
                     client_id: env.GOOGLE_CLIENT_ID,
                     client_secret: env.GOOGLE_CLIENT_SECRET,
