@@ -165,7 +165,9 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         access_token: data.access_token,
         refresh_token: data.refresh_token,
     };
-    await env.TOKEN_STORE.put(`session:${sessionId}`, JSON.stringify(session));
+    await env.TOKEN_STORE.put(`session:${sessionId}`, JSON.stringify(session), {
+        expirationTtl: 30 * 24 * 60 * 60, // 30 days
+    });
 
     // session id will be saved to FE cookie.
     const sessionCookie = cookie.serialize("session_id", sessionId, {
@@ -318,6 +320,9 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
             await env.TOKEN_STORE.put(
                 `session:${sessionId}`,
                 JSON.stringify(session),
+                {
+                    expirationTtl: 30 * 24 * 60 * 60, // 30 days
+                },
             );
             // Make the request again with the new access token.
             response = await makeRequest(session.access_token);
@@ -443,6 +448,9 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
             await env.TOKEN_STORE.put(
                 `session:${sessionId}`,
                 JSON.stringify(session),
+                {
+                    expirationTtl: 30 * 24 * 60 * 60, // 30 days
+                },
             );
             userInfoResponse = await fetchUserInfo(session.access_token);
         } else {
