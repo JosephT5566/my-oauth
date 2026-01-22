@@ -8,6 +8,7 @@ interface AppConfig {
     client_id: string;
     allowed_origins: string[];
     gas_url: string;
+    allowed_emails?: string[];
 }
 
 interface Session {
@@ -158,6 +159,41 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
     const data: any = await response.json();
     if (data.error) {
         return new Response(data.error_description, { status: 400 });
+    }
+
+    // If an allowlist is configured, enforce it
+    if (config.allowed_emails && config.allowed_emails.length > 0) {
+        // Fetch user info to check email against the allowlist
+        const userInfoResponse = await fetch(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            {
+                headers: {
+                    Authorization: `Bearer ${data.access_token}`,
+                },
+            },
+        );
+
+        if (!userInfoResponse.ok) {
+            return new Response("Failed to fetch user info from Google", {
+                status: 500,
+            });
+        }
+
+        const userInfo: { email?: string } = await userInfoResponse.json();
+        const userEmail = userInfo.email;
+
+        if (!userEmail) {
+            return new Response("Could not retrieve user email from Google", {
+                status: 500,
+            });
+        }
+
+        if (!config.allowed_emails.includes(userEmail)) {
+            return new Response(
+                `Email <${userEmail}> is not authorized to access this application.`,
+                { status: 403 },
+            );
+        }
     }
 
     const sessionId = nanoid();
@@ -529,10 +565,6 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
         headers,
     });
 });
-
-
-
-
 
 router.all("*", () => new Response("Not Found.", { status: 404 }));
 

@@ -51,11 +51,13 @@ npx wrangler kv key put --binding=<Store name> "<KEY>" "<VALUE>" --remote
 The config keys are necessary for the proxy.
 The key serves for the available entry and the following GAS url.
 
-For example, key: `config:test-app`, and the url `/test/config/test-app/...` is available.
+For example, key: `config:test-app`, and the url `/auth/test-app/...` is available.
 And the value should be:
-```
+```json
 {
-  "allowed_origins": ["http://localhost:3000", "https://josephtseng-tw.github.io"],
-  "gas_url": "<GAS_URL>"
+  "allowed_origins": ["http://localhost:3000", "<ORIGIN_URL>"],
+  "gas_url": "<GAS_URL>",
+  "allowed_emails": ["user1@example.com", "user2@example.com"]
 }
 ```
+**Note:** If `allowed_emails` is provided and is not empty, only users authenticating with a matching Google account email will be granted a session. If the key is omitted or the array is empty, all users will be allowed.
