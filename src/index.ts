@@ -22,7 +22,7 @@ interface GASResponse {
     errorCode?: string;
 }
 
-router.get("/", () => "Success!");
+router.get("/ok", () => "Success!");
 
 // CORS Preflight
 router.options("*", async (request: IRequest, env: Env) => {
@@ -530,53 +530,9 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
     });
 });
 
-// GET /test/config/:app_id
-router.get("/test/config/:app_id", async (request: IRequest, env: Env) => {
-    const origin = request.headers.get("Origin");
-    if (!origin) {
-        return new Response("Missing Origin header", { status: 400 });
-    }
-    const { app_id } = request.params;
-    const config: AppConfig | null = await env.TOKEN_STORE.get(
-        `config:${app_id}`,
-        "json",
-    );
 
-    if (!config) {
-        return new Response("App not found", { status: 404 });
-    }
 
-    return new Response(JSON.stringify(config, null, 2), {
-        headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": origin,
-        },
-    });
-});
 
-// GET /test/session
-router.get("/test/session", async (request: IRequest, env: Env) => {
-    const cookies = cookie.parse(request.headers.get("Cookie") || "");
-    const sessionId = cookies.session_id;
-
-    if (!sessionId) {
-        return new Response("Not authenticated", { status: 401 });
-    }
-
-    const session: Session | null = await env.TOKEN_STORE.get(
-        `session:${sessionId}`,
-        "json",
-    );
-    if (!session) {
-        return new Response("Invalid session", { status: 401 });
-    }
-
-    return new Response(JSON.stringify(session, null, 2), {
-        headers: {
-            "Content-Type": "application/json",
-        },
-    });
-});
 
 router.all("*", () => new Response("Not Found.", { status: 404 }));
 
