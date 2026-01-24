@@ -212,6 +212,7 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         sameSite: "lax",
         domain: "josephtseng-tw.com",
         path: "/",
+        maxAge: 7 * 24 * 60 * 60, // 7 days
     });
 
     const loggedInCookie = cookie.serialize("is_logged_in", "true", {
