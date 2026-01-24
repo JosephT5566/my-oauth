@@ -313,6 +313,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     };
 
     let response: Response | null = null;
+    let needsCookieUpdate = false; // Initialize flag
     try {
         response = await makeRequest(session.access_token);
     } catch (error) {
@@ -333,7 +334,6 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
     ) {
         console.log("token expired");
 
-        await env.TOKEN_STORE.delete(`session:${sessionId}`);
         // Refresh the access token
         const refreshResponse = await fetch(
             "https://oauth2.googleapis.com/token",
@@ -362,9 +362,15 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
                     expirationTtl: 30 * 24 * 60 * 60, // 30 days
                 },
             );
+
+            needsCookieUpdate = true;
+
             // Make the request again with the new access token.
             response = await makeRequest(session.access_token);
         } else {
+            console.error("Refresh failed, cleaning up session");
+            await env.TOKEN_STORE.delete(`session:${sessionId}`);
+
             const errorResponse = createCorsError(
                 "Failed to refresh token",
                 401,
@@ -395,6 +401,26 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
         const newHeaders = new Headers(response.headers);
         newHeaders.set("Access-Control-Allow-Origin", origin);
         newHeaders.set("Access-Control-Allow-Credentials", "true");
+
+        if (needsCookieUpdate) { // Conditionally append cookies
+            const updatedSessionCookie = cookie.serialize("session_id", sessionId, {
+                httpOnly: true,
+                secure: true,
+                sameSite: "lax",
+                domain: "josephtseng-tw.com",
+                path: "/",
+                maxAge: 7 * 24 * 60 * 60, // 7 days
+            });
+            const updatedLoggedInCookie = cookie.serialize("is_logged_in", "true", {
+                secure: true,
+                sameSite: "lax",
+                domain: "josephtseng-tw.com",
+                path: "/",
+                maxAge: 7 * 24 * 60 * 60, // 7 days
+            });
+            newHeaders.append("Set-Cookie", updatedSessionCookie);
+            newHeaders.append("Set-Cookie", updatedLoggedInCookie);
+        }
 
         return new Response(response.body, {
             status: response.status,
@@ -459,6 +485,7 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
     };
 
     let userInfoResponse = await fetchUserInfo(session.access_token);
+    let needsCookieUpdate = false;
 
     // update the access token once we found it's expired
     if (userInfoResponse.status === 401 && session.refresh_token) {
@@ -491,6 +518,7 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
                 },
             );
             userInfoResponse = await fetchUserInfo(session.access_token);
+            needsCookieUpdate = true;
         } else {
             const errorResponse = createCorsError("Session expired", 401);
             const sessionCookie = cookie.serialize("session_id", "", {
@@ -527,6 +555,26 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
     });
+
+    if (needsCookieUpdate) { // Conditionally append cookies
+        const updatedSessionCookie = cookie.serialize("session_id", sessionId, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            maxAge: 7 * 24 * 60 * 60, // 7 days
+        });
+        const updatedLoggedInCookie = cookie.serialize("is_logged_in", "true", {
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            maxAge: 7 * 24 * 60 * 60, // 7 days
+        });
+        headers.append("Set-Cookie", updatedSessionCookie);
+        headers.append("Set-Cookie", updatedLoggedInCookie);
+    }
     return new Response(JSON.stringify(userInfo), { headers });
 });
 
