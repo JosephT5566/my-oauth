@@ -402,22 +402,31 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
         newHeaders.set("Access-Control-Allow-Origin", origin);
         newHeaders.set("Access-Control-Allow-Credentials", "true");
 
-        if (needsCookieUpdate) { // Conditionally append cookies
-            const updatedSessionCookie = cookie.serialize("session_id", sessionId, {
-                httpOnly: true,
-                secure: true,
-                sameSite: "lax",
-                domain: "josephtseng-tw.com",
-                path: "/",
-                maxAge: 7 * 24 * 60 * 60, // 7 days
-            });
-            const updatedLoggedInCookie = cookie.serialize("is_logged_in", "true", {
-                secure: true,
-                sameSite: "lax",
-                domain: "josephtseng-tw.com",
-                path: "/",
-                maxAge: 7 * 24 * 60 * 60, // 7 days
-            });
+        if (needsCookieUpdate) {
+            // Conditionally append cookies
+            const updatedSessionCookie = cookie.serialize(
+                "session_id",
+                sessionId,
+                {
+                    httpOnly: true,
+                    secure: true,
+                    sameSite: "lax",
+                    domain: "josephtseng-tw.com",
+                    path: "/",
+                    maxAge: 7 * 24 * 60 * 60, // 7 days
+                },
+            );
+            const updatedLoggedInCookie = cookie.serialize(
+                "is_logged_in",
+                "true",
+                {
+                    secure: true,
+                    sameSite: "lax",
+                    domain: "josephtseng-tw.com",
+                    path: "/",
+                    maxAge: 7 * 24 * 60 * 60, // 7 days
+                },
+            );
             newHeaders.append("Set-Cookie", updatedSessionCookie);
             newHeaders.append("Set-Cookie", updatedLoggedInCookie);
         }
@@ -556,7 +565,8 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
         "Access-Control-Allow-Credentials": "true",
     });
 
-    if (needsCookieUpdate) { // Conditionally append cookies
+    if (needsCookieUpdate) {
+        // Conditionally append cookies
         const updatedSessionCookie = cookie.serialize("session_id", sessionId, {
             httpOnly: true,
             secure: true,
@@ -576,6 +586,156 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
         headers.append("Set-Cookie", updatedLoggedInCookie);
     }
     return new Response(JSON.stringify(userInfo), { headers });
+});
+
+// GET /auth/:app_id/refresh
+router.get("/auth/:app_id/refresh", async (request: IRequest, env: Env) => {
+    const { app_id } = request.params;
+    const origin = request.headers.get("Origin");
+
+    const config: AppConfig | null = await env.TOKEN_STORE.get(
+        `config:${app_id}`,
+        "json",
+    );
+
+    const createCorsError = (message: string, status: number) => {
+        const headers = new Headers();
+        if (origin && config?.allowed_origins.includes(origin)) {
+            headers.set("Access-Control-Allow-Origin", origin);
+            headers.set("Access-Control-Allow-Credentials", "true");
+        } else if (origin) {
+            headers.set("Access-Control-Allow-Origin", origin);
+            headers.set("Access-Control-Allow-Credentials", "true");
+        }
+        return new Response(message, { status, headers });
+    };
+
+    if (!config) {
+        return createCorsError("App not found", 404);
+    }
+    if (!origin || !config.allowed_origins.includes(origin)) {
+        return createCorsError("Invalid origin", 403);
+    }
+
+    const cookies = cookie.parse(request.headers.get("Cookie") || "");
+    const sessionId = cookies.session_id;
+
+    if (!sessionId) {
+        return createCorsError("Not authenticated", 401);
+    }
+
+    const session: Session | null = await env.TOKEN_STORE.get(
+        `session:${sessionId}`,
+        "json",
+    );
+
+    if (!session || !session.refresh_token) {
+        // If no session or no refresh token, we can't refresh.
+        // This session is not useful anymore.
+        const errorResponse = createCorsError(
+            "Invalid session or no refresh token",
+            401,
+        );
+        const sessionCookie = cookie.serialize("session_id", "", {
+            httpOnly: true,
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            expires: new Date(0),
+        });
+        const loggedInCookie = cookie.serialize("is_logged_in", "", {
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            expires: new Date(0),
+        });
+        errorResponse.headers.append("Set-Cookie", sessionCookie);
+        errorResponse.headers.append("Set-Cookie", loggedInCookie);
+        if (sessionId) {
+            await env.TOKEN_STORE.delete(`session:${sessionId}`);
+        }
+        return errorResponse;
+    }
+
+    const refreshResponse = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+            client_id: env.GOOGLE_CLIENT_ID,
+            client_secret: env.GOOGLE_CLIENT_SECRET,
+            refresh_token: session.refresh_token,
+            grant_type: "refresh_token",
+        }),
+    });
+
+    const refreshData: any = await refreshResponse.json();
+
+    if (refreshData.access_token) {
+        session.access_token = refreshData.access_token;
+        // Google might return a new refresh token (rare, but possible)
+        if (refreshData.refresh_token) {
+            session.refresh_token = refreshData.refresh_token;
+        }
+        await env.TOKEN_STORE.put(
+            `session:${sessionId}`,
+            JSON.stringify(session),
+            {
+                expirationTtl: 30 * 24 * 60 * 60, // 30 days
+            },
+        );
+
+        const headers = new Headers({
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        });
+
+        const updatedSessionCookie = cookie.serialize("session_id", sessionId, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            maxAge: 7 * 24 * 60 * 60, // 7 days
+        });
+        const updatedLoggedInCookie = cookie.serialize("is_logged_in", "true", {
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            maxAge: 7 * 24 * 60 * 60, // 7 days
+        });
+        headers.append("Set-Cookie", updatedSessionCookie);
+        headers.append("Set-Cookie", updatedLoggedInCookie);
+
+        return new Response(JSON.stringify({ success: true }), { headers });
+    } else {
+        // Refresh token is likely invalid or revoked.
+        const errorResponse = createCorsError("Session expired", 401);
+        const sessionCookie = cookie.serialize("session_id", "", {
+            httpOnly: true,
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            expires: new Date(0),
+        });
+        const loggedInCookie = cookie.serialize("is_logged_in", "", {
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            expires: new Date(0),
+        });
+        errorResponse.headers.append("Set-Cookie", sessionCookie);
+        errorResponse.headers.append("Set-Cookie", loggedInCookie);
+        await env.TOKEN_STORE.delete(`session:${sessionId}`);
+        return errorResponse;
+    }
 });
 
 // GET /auth/:app_id/logout

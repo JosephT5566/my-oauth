@@ -16,12 +16,15 @@ The following routes are exposed by the worker:
     -   **Description:** Initiates the Google OAuth login flow. It will redirect the user to the Google consent screen.
     -   **`redirect_to` (optional):** The URL to redirect the user back to after a successful login. If not provided, it defaults to the first origin in the app's `allowed_origins` config. The origin of this URL must be in the `allowed_origins` list.
 
+-   `GET /auth/:app_id/me`
+    -   **Description:** Returns the authenticated user's Google profile information (name, email, picture) as a JSON object. Requires a valid session cookie.
+
+-   `GET /auth/:app_id/refresh`
+    -   **Description:** Refreshes the user's access token using the stored refresh token. This route updates the session and extends the session cookies.
+
 -   `GET /auth/:app_id/logout?redirect_to=<URL>`
     -   **Description:** Logs the user out by clearing their session data and cookies.
     -   **`redirect_to` (optional):** A URL to redirect the user to after logout is complete.
-
--   `GET /auth/:app_id/me`
-    -   **Description:** Returns the authenticated user's Google profile information (name, email, picture) as a JSON object. Requires a valid session cookie.
 
 -   `ALL /auth/:app_id/api/*`
     -   **Description:** Acts as an authenticated proxy. It forwards any request (`GET`, `POST`, etc.) to the `gas_url` configured for the `:app_id`. It automatically injects the user's `access_token` into the proxied request and handles token refresh if necessary.
