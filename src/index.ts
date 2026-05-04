@@ -103,7 +103,7 @@ router.get("/auth/:app_id/login", async (request: IRequest, env: Env) => {
     );
     authUrl.searchParams.append(
         "scope",
-        "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/script.projects",
+        "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/script.projects",
     );
     authUrl.searchParams.append("response_type", "code");
     authUrl.searchParams.append("access_type", "offline");
@@ -223,9 +223,19 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         maxAge: 7 * 24 * 60 * 60, // 7 days
     });
 
+    const idTokenCookie = cookie.serialize("id_token", data.id_token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        domain: "josephtseng-tw.com",
+        path: "/",
+        maxAge: 60 * 60, // 1 hour
+    });
+
     const headers = new Headers({ Location: statePayload.redirectTo });
     headers.append("Set-Cookie", sessionCookie);
     headers.append("Set-Cookie", loggedInCookie);
+    headers.append("Set-Cookie", idTokenCookie);
 
     return new Response(null, {
         status: 302,
@@ -445,6 +455,7 @@ router.all("/auth/:app_id/api/*", async (request: IRequest, env: Env) => {
 router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
     const { app_id } = request.params;
     const origin = request.headers.get("Origin");
+    let newIdToken: string | undefined = undefined;
 
     const config: AppConfig | null = await env.TOKEN_STORE.get(
         `config:${app_id}`,
@@ -519,6 +530,9 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
             if (refreshData.refresh_token) {
                 session.refresh_token = refreshData.refresh_token;
             }
+            if (refreshData.id_token) {
+                newIdToken = refreshData.id_token;
+            }
             await env.TOKEN_STORE.put(
                 `session:${sessionId}`,
                 JSON.stringify(session),
@@ -545,8 +559,16 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
                 path: "/",
                 expires: new Date(0),
             });
+            const idTokenCookie = cookie.serialize("id_token", "", {
+                secure: true,
+                sameSite: "lax",
+                domain: "josephtseng-tw.com",
+                path: "/",
+                expires: new Date(0),
+            });
             errorResponse.headers.append("Set-Cookie", sessionCookie);
             errorResponse.headers.append("Set-Cookie", loggedInCookie);
+            errorResponse.headers.append("Set-Cookie", idTokenCookie);
             await env.TOKEN_STORE.delete(`session:${sessionId}`);
             return errorResponse;
         }
@@ -584,6 +606,17 @@ router.get("/auth/:app_id/me", async (request: IRequest, env: Env) => {
         });
         headers.append("Set-Cookie", updatedSessionCookie);
         headers.append("Set-Cookie", updatedLoggedInCookie);
+    }
+    if (newIdToken) {
+        const idTokenCookie = cookie.serialize("id_token", newIdToken, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "lax",
+            domain: "josephtseng-tw.com",
+            path: "/",
+            maxAge: 60 * 60, // 1 hour
+        });
+        headers.append("Set-Cookie", idTokenCookie);
     }
     return new Response(JSON.stringify(userInfo), { headers });
 });
@@ -712,6 +745,22 @@ router.get("/auth/:app_id/refresh", async (request: IRequest, env: Env) => {
         headers.append("Set-Cookie", updatedSessionCookie);
         headers.append("Set-Cookie", updatedLoggedInCookie);
 
+        if (refreshData.id_token) {
+            const idTokenCookie = cookie.serialize(
+                "id_token",
+                refreshData.id_token,
+                {
+                    httpOnly: true,
+                    secure: true,
+                    sameSite: "lax",
+                    domain: "josephtseng-tw.com",
+                    path: "/",
+                    maxAge: 60 * 60, // 1 hour
+                },
+            );
+            headers.append("Set-Cookie", idTokenCookie);
+        }
+
         return new Response(JSON.stringify({ success: true }), { headers });
     } else {
         // Refresh token is likely invalid or revoked.
@@ -766,9 +815,18 @@ router.get("/auth/:app_id/logout", async (request: IRequest, env: Env) => {
         expires: new Date(0),
     });
 
+    const idTokenCookie = cookie.serialize("id_token", "", {
+        secure: true,
+        sameSite: "lax",
+        domain: "josephtseng-tw.com",
+        path: "/",
+        expires: new Date(0),
+    });
+
     const headers = new Headers({ Location: redirectTo });
     headers.append("Set-Cookie", sessionCookie);
     headers.append("Set-Cookie", loggedInCookie);
+    headers.append("Set-Cookie", idTokenCookie);
 
     return new Response(null, {
         status: 302,
