@@ -16,6 +16,7 @@ The following routes are exposed by the worker:
 -   `GET /auth/:app_id/login?redirect_to=<URL>`
     -   **Description:** Initiates the Google OAuth login flow. On successful callback, it sets `session_id` (HttpOnly), `is_logged_in`, and `id_token` (HttpOnly) cookies.
     -   **`redirect_to` (optional):** The URL to redirect the user back to after a successful login. If not provided, it defaults to the first origin in the app's `allowed_origins` config. The origin of this URL must be in the `allowed_origins` list.
+    -   **Callback errors:** If Google returns an error, token exchange fails, user info cannot be fetched, the Google account has no email, or the email is not allowed, the callback redirects back to `redirect_to` with `auth_error=<code>` instead of leaving the user on the auth callback URL. Current codes are `oauth_denied`, `token_exchange_failed`, `userinfo_failed`, `email_unavailable`, and `unauthorized_email`.
 
 -   `GET /auth/:app_id/me`
     -   **Description:** Returns the authenticated user's Google profile information (name, email, picture) as a JSON object. Requires a valid session cookie. If the access token is expired, it will be refreshed, and all session cookies (including `id_token`) will be updated.

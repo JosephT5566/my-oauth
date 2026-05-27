@@ -120,9 +120,10 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
     // Once Google Oauth flow is complete, Google will return the data, code and state, to callback
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
+    const oauthError = url.searchParams.get("error");
 
-    if (!code || !state) {
-        return new Response("Missing code or state", { status: 400 });
+    if (!state) {
+        return new Response("Missing state", { status: 400 });
     }
 
     const statePayload: { app_id: string; redirectTo: string } | null =
@@ -134,6 +135,20 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
 
     await env.TOKEN_STORE.delete(`state:${state}`);
 
+    const redirectWithAuthError = (errorCode: string) => {
+        const redirectUrl = new URL(statePayload.redirectTo);
+        redirectUrl.searchParams.set("auth_error", errorCode);
+        return Response.redirect(redirectUrl.toString(), 302);
+    };
+
+    if (oauthError) {
+        return redirectWithAuthError("oauth_denied");
+    }
+
+    if (!code) {
+        return new Response("Missing code", { status: 400 });
+    }
+
     const config: AppConfig | null = await env.TOKEN_STORE.get(
         `config:${app_id}`,
         "json",
@@ -142,57 +157,71 @@ router.get("/auth/:app_id/callback", async (request: IRequest, env: Env) => {
         return new Response("App not found", { status: 404 });
     }
 
-    const response = await fetch("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-            client_id: env.GOOGLE_CLIENT_ID,
-            client_secret: env.GOOGLE_CLIENT_SECRET,
-            redirect_uri: `${url.origin}/auth/${app_id}/callback`,
-            grant_type: "authorization_code",
-            code,
-        }),
-    });
+    let response: Response;
+    try {
+        response = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({
+                client_id: env.GOOGLE_CLIENT_ID,
+                client_secret: env.GOOGLE_CLIENT_SECRET,
+                redirect_uri: `${url.origin}/auth/${app_id}/callback`,
+                grant_type: "authorization_code",
+                code,
+            }),
+        });
+    } catch (error) {
+        return redirectWithAuthError("token_exchange_failed");
+    }
 
-    const data: any = await response.json();
-    if (data.error) {
-        return new Response(data.error_description, { status: 400 });
+    let data: any;
+    try {
+        data = await response.json();
+    } catch (error) {
+        return redirectWithAuthError("token_exchange_failed");
+    }
+
+    if (!response.ok || data.error || !data.access_token || !data.id_token) {
+        return redirectWithAuthError("token_exchange_failed");
     }
 
     // If an allowlist is configured, enforce it
     if (config.allowed_emails && config.allowed_emails.length > 0) {
         // Fetch user info to check email against the allowlist
-        const userInfoResponse = await fetch(
-            "https://www.googleapis.com/oauth2/v3/userinfo",
-            {
-                headers: {
-                    Authorization: `Bearer ${data.access_token}`,
+        let userInfoResponse: Response;
+        try {
+            userInfoResponse = await fetch(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                {
+                    headers: {
+                        Authorization: `Bearer ${data.access_token}`,
+                    },
                 },
-            },
-        );
-
-        if (!userInfoResponse.ok) {
-            return new Response("Failed to fetch user info from Google", {
-                status: 500,
-            });
+            );
+        } catch (error) {
+            return redirectWithAuthError("userinfo_failed");
         }
 
-        const userInfo: { email?: string } = await userInfoResponse.json();
+        if (!userInfoResponse.ok) {
+            return redirectWithAuthError("userinfo_failed");
+        }
+
+        let userInfo: { email?: string };
+        try {
+            userInfo = await userInfoResponse.json();
+        } catch (error) {
+            return redirectWithAuthError("userinfo_failed");
+        }
         const userEmail = userInfo.email;
 
         if (!userEmail) {
-            return new Response("Could not retrieve user email from Google", {
-                status: 500,
-            });
+            return redirectWithAuthError("email_unavailable");
         }
 
         if (!config.allowed_emails.includes(userEmail)) {
-            return new Response(
-                `Email <${userEmail}> is not authorized to access this application.`,
-                { status: 403 },
-            );
+            return redirectWithAuthError("unauthorized_email");
         }
     }
 
