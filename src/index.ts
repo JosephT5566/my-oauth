@@ -103,7 +103,7 @@ router.get("/auth/:app_id/login", async (request: IRequest, env: Env) => {
     );
     authUrl.searchParams.append(
         "scope",
-        "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/script.projects",
+        "openid email profile",
     );
     authUrl.searchParams.append("response_type", "code");
     authUrl.searchParams.append("access_type", "offline");

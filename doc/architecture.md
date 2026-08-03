@@ -10,7 +10,7 @@ OAuth parameters currently include:
 
 - `client_id`: `env.GOOGLE_CLIENT_ID`
 - `redirect_uri`: current request origin plus `/auth/:app_id/callback`
-- `scope`: OpenID, user email, user profile, and Google Apps Script projects scope
+- `scope`: OpenID, user email, and user profile (`openid email profile`)
 - `response_type`: `code`
 - `access_type`: `offline`
 - `prompt`: `consent`
