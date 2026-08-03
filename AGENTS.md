@@ -30,6 +30,8 @@ Read these memory docs before changing behavior:
 - Runtime is Cloudflare Workers. Use Web APIs and Worker-compatible dependencies.
 - Sessions and app configuration are stored in the `TOKEN_STORE` KV binding.
 - Google client credentials must stay in secrets/env values, not source files.
+- Joseph OAuth is exclusively an authentication service. Keep its requested scopes limited to the minimum OpenID Connect set: `openid`, `email`, and `profile`.
+- Do not add delegated Google service access to the end-user OAuth flow. Backends must access services such as Google Sheets, Apps Script, and Cloud Functions with their own credentials or deployment identity, not on behalf of end users.
 - Cookie behavior is security-sensitive. Existing cookies use `secure`, `sameSite: "lax"`, `path: "/"`, and domain `josephtseng-tw.com`.
 - App-specific access is controlled by KV entries named `config:<app_id>`.
 - Allowed redirect origins and CORS origins must come from each app config's `allowed_origins`.

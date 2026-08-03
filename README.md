@@ -1,6 +1,9 @@
 # About My-Oauth
 This project is a Cloudflare Worker that acts as a secure OAuth 2.0 proxy for Google Authentication. It is designed to be deployed as a serverless function on Cloudflare's edge network.
 
+> [!IMPORTANT]
+> Joseph OAuth is used exclusively for user authentication. It intentionally requests only the minimum OpenID Connect scopes: `openid`, `email`, and `profile`. Access to Google services—such as Google Sheets, Apps Script, or Cloud Functions—is performed by backend services using their own credentials or deployment identity, never on behalf of end users.
+
 Key features include:
 -   Handling the complete Google OAuth 2.0 `authorization_code` flow, including token exchange.
 -   Storing session data (access and refresh tokens) securely in a Cloudflare KV namespace.
@@ -29,7 +32,7 @@ The following routes are exposed by the worker:
     -   **`redirect_to` (optional):** A URL to redirect the user to after logout is complete.
 
 -   `ALL /auth/:app_id/api/*`
-    -   **Description:** Acts as an authenticated proxy. It forwards any request (`GET`, `POST`, etc.) to the `gas_url` configured for the `:app_id`. It automatically injects the user's `access_token` into the proxied request and handles token refresh if necessary.
+    -   **Description:** Acts as an authenticated proxy. It forwards any request (`GET`, `POST`, etc.) to the `gas_url` configured for the `:app_id`. For POST requests with JSON bodies, it includes the user's OpenID Connect access token as authentication context and handles token refresh when necessary. This token carries only the scopes listed above and does not grant the backend access to Google services on the user's behalf.
 
 
 
